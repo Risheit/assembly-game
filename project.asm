@@ -46,6 +46,8 @@
 # - Argument registers: ($a0 - $a3): These registers may be modified by the 
 #   calling function, unless the function ends in a '_c'. Functions who's names 
 #   end in '_c' do not modify the arguments passed into them.
+# - Evaluation registers: ($v0, $v1): These registers may be modifed by the calling
+#   function to be the function's return value.
 #####################################################################
 
 .data 
@@ -56,7 +58,7 @@
 .eqv WIDTH 64		# Width of the bitmap display in pixels
 .eqv WIDTH_S 6		# The shift equivalent to scaling by width (val * WIDTH == val << WIDTH_S)
 .eqv HEIGHT 128		# Height of the bitmap display in pixels
-.eqv UNIT 4		# Size of one unit in bytes
+.eqv UNIT 4		# Size of one unit in pixels
 .eqv UNIT_S 2		# The shift equivalent to scaling by a unit (val * UNIT == val << UNIT_S)
 
 # COLOURS 
@@ -160,8 +162,9 @@ TEST_SPR: .word WHITE, PLAYER_HEAD, WHITE,
 main:
 
 # REGISTER CONTRACT:
-# t4, t5 - intermediate storage for values to be used and discarded
-# s0 - variables not preserved across sections
+# a0, a1, a2, a3  - arguments to be given to functions
+# t4, t5, t6 - intermediate storage for values to be used and discarded
+# s0, s1, s2, s3 - variables not preserved across sections
 # s6 - OBJECT_LOCATIONS Array
 # s7 - OBJECT_DETAILS Array 
 
@@ -182,7 +185,6 @@ main_init:
 	# Initialize player details
 	li $t4, 0x8100 # 1 000 000 10 000 0000 initializes active player with 3 health.
 	sw $t4, 0($s7)
-	
 
 main_start_loop: 
 # Start of the main game loop
@@ -231,22 +233,80 @@ main_input_d:
 main_handle_physics:
 # Handle the movement that occurs in the game world without player input.
 
+# Registers overwritten:
+# s0 - Object location address
+# s1 - Object details address
+# s2 - Loop index
+# s3 - Details/location of current object
+	
+	add $s0, $s6, $zero # Load initial location address
+	add $s1, $s7, $zero # Load initial details address
+	li $s2, 0
+main_physics_loop:
+	beq $s3, MAX_OBJECTS, main_physics_loop_end # loop while s2 < MAX_OBJECTS
+	
+	addi $s0, $s0, 4 # Increment by word
+	addi $s1, $s1, 2 # Increment by halfword
+	
+	# Check if object exists (bit 15 of object details is == 1)
+	lh $s3, 0($s1)
+	srl $t4, $s3, 15 # Consider only existance bit
+	beqz $t4, main_object_exists_end
+main_object_exists:
+#	# Get whether moving in y-direction
+#	srl $t4, $s3, 2 # Consider only y-movement bit
+#	andi $t4, $t4, 1
+#
+#	beqz $t4, main_x_movement 
+#main_y_movement:
+#	# Get whether moving up or down
+#	sll $t4, $s3, 12
+#	sra $t4, $t4, 15 # t4 = 11...1 or 00...0
+#
+#	# +/- WIDTH == +/- 1 unit in y-direction
+#	# We want t4 to be 11...1 or 00...0
+#	# Move by +WIDTH if t4 = 1, -WIDTH if t4 = 0 => [(-WIDTH) AND (~t4)] OR [(WIDTH) AND (t4)]
+#	li $t6, WIDTH
+#	not $t6, $t6
+#	addi $t6, $t6, 1 # t6 = -WIDTH (Two's complement)
+#	not $t5, $t4
+#	and $t5, $t5, $t6 # t5 = (-WIDTH) AND (~t4)
+#	andi $t6, $t4, WIDTH # t6 = (WIDTH) AND (t4)
+#	or $t5, $t5, $t6 # t5 = [(-WIDTH) AND (~t4)] OR [(WIDTH) AND (t4)]
+#
+#	# Update movement details of object
+#	andi $s3, $s3, 0xFFFB # Set y-movement bit to 0
+#	sh $s3, 0($s1) 
+#	
+#	# Update position of object
+#	lh $s3, 2($s0) # Load current y-value of object
+#	add $s3, $s3, $t5
+#	sh $s3, 2($s0) # Update y-value
+#
+#main_x_movement:
+main_object_exists_end:	
+	addi $s2, $s2, 1
+	j main_physics_loop
+
+main_physics_loop_end:
+
+
 main_handle_objects:
 # Introduce new objects into the game world and remove unneeded ones.
 
 main_handle_drawing:
 # Draw and clear sprites from the screen based on states set by previous sections.
 
-#	la $a0, PLAYER_SPR
-#	li $a1, PLAYER_WIDTH
-#	li $a2, PLAYER_HEIGHT
+	la $a0, PLAYER_SPR
+	li $a1, PLAYER_WIDTH
+	li $a2, PLAYER_HEIGHT
 	# Store screen address to print to
-#	lh $t4, 0($s6) # Get player x-val
-#	lh $t5, 2($s6) # Get player y-val
-#	add $t4, $t4, $t5 # array index = x + (y * WIDTH)
-#	add $a3, $gp, $t4 # increment starting screen address by array index. 
+	lh $t4, 0($s6) # Get player x-val
+	lh $t5, 2($s6) # Get player y-val
+	add $t4, $t4, $t5 # array index = x + (y * WIDTH)
+	add $a3, $gp, $t4 # increment starting screen address by array index. 
 	
-#	jal print_sprite_c
+	jal print_sprite_c
 
 main_frame_sleep:
 # Sleep for a0 milliseconds
@@ -320,3 +380,46 @@ pspr_end:
 	jr $ra
 # print_sprite_c
 
+move_object_c:
+# Returns what the new location would be of an object that was moved from a given location
+# according to the given movement details.
+#
+# v0 -- The new location details of the object.
+# a0 -- 16-bit initial x/y location. 
+# a1 -- movement details. This is a 2-bit value, with each bit having a different meaning.
+#					1b|0b
+#	0b = 1 if there will be movement. If this bit is 0, then the starting location will be returned.
+#	1b = 0/1 depending on whether there is positive/negative movement.
+# a2 -- scaling amount. Represents how far the object travels in a given direction
+#	If this amount = C * UNIT, then the object may move in the x-direction by +/- C units.
+#	If this amount = C * WIDTH, then the object may move in the y-direction by +/- C units.
+
+# Registers in use:
+# t0 - Amount being moved
+# t4 - intermediate storage for movement detail bits
+# t5, t6 - intermediate steps in logical expression 
+
+	li $t0, 0 # No movement by default
+
+	# Get whether moving 
+	andi $t4, $a1, 0x1 # Consider only bit 0.
+	
+	beqz $t4, mvob_end
+mvob_calculate:
+	# Get whether positive or negative movement
+	sll $t4, $a1, 14
+	sra $t4, $t4, 15 # t4 = 11...1 or 00...1 according to postive/negative movement bit
+
+	# We want t4 to be 11...1 or 00...0
+	# Move by +a2 if t4 = 1, -a2 if t4 = 0 => [(-a2) AND (~t4)] OR [(a2) AND (t4)]
+	add $t6, $a2, $zero
+	not $t6, $t6
+	addi $t6, $t6, 1 # t6 = -a2 (Two's complement)
+	not $t5, $t4
+	and $t5, $t5, $t6 # t5 = (-a2) AND (~t4)
+	and $t6, $t4, $a2 # t6 = (a2) AND (t4)
+	or $t0, $t5, $t6 # t0 = [(-a2) AND (~t4)] OR [(a2) AND (t4)]
+mvob_end:
+	add $v0, $a0, $t0
+	jr $ra
+# move_object_c
