@@ -84,7 +84,7 @@
 ############################ GAME DATA ###############################
 
 # ENTITY INFORMATION
-.eqv MAX_OBJECTS 16		# The maximum number of objects (platforms/entities) allowed on 
+.eqv MAX_OBJECTS 1#6		# The maximum number of objects (platforms/entities) allowed on 
 				# the screen at once. (Array size of OBJECT_X arrays)
 
 .align 2
@@ -106,7 +106,7 @@ OBJECT_DETAILS: .space 32
 # 	0b = 1 when the player will move in the x-direction this frame.
 # 	1b = 0/1 when the player is going to move left/right.
 # 	2b = 1 when the player will move in the y-direction this frame.
-#  	3b = 0/1 when the player is going to move down/up.
+#  	3b = 0/1 when the player is going to move up/down.
 # bits 4-6 are used to specify the type of object that this byte refers to.
 # 	000 = Player
 #	001 = Platform
@@ -206,7 +206,7 @@ main_handle_input:
 main_input_w:
 	bne $s0, KEY_W, main_input_a # Skip if key != 'w'
 	lw $t4, 0($s7) # Get player details
-	ori $t4, $t4, 0xC # X XXX XXX XX XXX 11XX Set player to move up.
+	ori $t4, $t4, 0x4 # X XXX XXX XX XXX 01XX Set player to move up.
 	sw $t4, 0($s7) # Update player details
 	j main_handle_physics
 	
@@ -220,7 +220,7 @@ main_input_a:
 main_input_s:
 	bne $s0, KEY_S, main_input_d # Skip if key != 's'
 	lw $t4, 0($s7) # Get player details
-	ori $t4, $t4, 0x4 # X XXX XXX XX XXX 01XX Set player to move up.
+	ori $t4, $t4, 0xC# X XXX XXX XX XXX 11XX Set player to move down.
 	sw $t4, 0($s7) # Update player details
 	j main_handle_physics
 
@@ -237,54 +237,49 @@ main_handle_physics:
 # s0 - Object location address
 # s1 - Object details address
 # s2 - Loop index
-# s3 - Details/location of current object
+# s3 - Details of current object
 	
-	add $s0, $s6, $zero # Load initial location address
-	add $s1, $s7, $zero # Load initial details address
+	move $s0, $s6 # Load initial location address
+	move $s1, $s7 # Load initial details address
 	li $s2, 0
 main_physics_loop:
-	beq $s3, MAX_OBJECTS, main_physics_loop_end # loop while s2 < MAX_OBJECTS
-	
-	addi $s0, $s0, 4 # Increment by word
-	addi $s1, $s1, 2 # Increment by halfword
+	beq $s2, MAX_OBJECTS, main_physics_loop_end # loop while s2 < MAX_OBJECTS
 	
 	# Check if object exists (bit 15 of object details is == 1)
 	lh $s3, 0($s1)
-	srl $t4, $s3, 15 # Consider only existance bit
+	srl $t4, $s3, 31 # Consider only existance bit
 	beqz $t4, main_object_exists_end
 main_object_exists:
-#	# Get whether moving in y-direction
-#	srl $t4, $s3, 2 # Consider only y-movement bit
-#	andi $t4, $t4, 1
-#
-#	beqz $t4, main_x_movement 
-#main_y_movement:
-#	# Get whether moving up or down
-#	sll $t4, $s3, 12
-#	sra $t4, $t4, 15 # t4 = 11...1 or 00...0
-#
-#	# +/- WIDTH == +/- 1 unit in y-direction
-#	# We want t4 to be 11...1 or 00...0
-#	# Move by +WIDTH if t4 = 1, -WIDTH if t4 = 0 => [(-WIDTH) AND (~t4)] OR [(WIDTH) AND (t4)]
-#	li $t6, WIDTH
-#	not $t6, $t6
-#	addi $t6, $t6, 1 # t6 = -WIDTH (Two's complement)
-#	not $t5, $t4
-#	and $t5, $t5, $t6 # t5 = (-WIDTH) AND (~t4)
-#	andi $t6, $t4, WIDTH # t6 = (WIDTH) AND (t4)
-#	or $t5, $t5, $t6 # t5 = [(-WIDTH) AND (~t4)] OR [(WIDTH) AND (t4)]
-#
-#	# Update movement details of object
-#	andi $s3, $s3, 0xFFFB # Set y-movement bit to 0
-#	sh $s3, 0($s1) 
-#	
-#	# Update position of object
-#	lh $s3, 2($s0) # Load current y-value of object
-#	add $s3, $s3, $t5
-#	sh $s3, 2($s0) # Update y-value
-#
-#main_x_movement:
+	# TODO: Make sure sprite is cleaned before printing
+
+	# Handle x-movement
+	lh $a0, 0($s0)
+	andi $a1, $s3, 0x3 # Consider only 0b and 1b in object details
+	li $a2, UNIT # Move by one unit
+	jal move_object_c
+	
+	sh $v0, 0($s0) # Update location
+	li $t4, 0
+	andi $s3, $s3, 0xFFFC # Set x-movement bit and left/right bit to 0
+	sh $s3, 0($s1) # Update object details
+	
+	# Handle y-movement 
+	lh $a0, 2($s0)
+	andi $a1, $s3, 0xC # Consider only 2b and 3b in object details
+	srl $a1, $a1, 2
+	li $a2, WIDTH # Move by one unit vertically
+	jal move_object_c
+	
+	sh $v0, 2($s0) # Update location
+	li $t4, 0
+	andi $s3, $s3, 0xFFF3 # Set y-movement and up/down bit to 0
+	sh $s3, 0($s1) # Update object details
+	
 main_object_exists_end:	
+
+	addi $s0, $s0, 4 # Increment by word
+	addi $s1, $s1, 2 # Increment by halfword
+
 	addi $s2, $s2, 1
 	j main_physics_loop
 
@@ -297,7 +292,7 @@ main_handle_objects:
 main_handle_drawing:
 # Draw and clear sprites from the screen based on states set by previous sections.
 
-	la $a0, PLAYER_SPR
+	la $a0, TEST_SPR
 	li $a1, PLAYER_WIDTH
 	li $a2, PLAYER_HEIGHT
 	# Store screen address to print to
@@ -305,7 +300,6 @@ main_handle_drawing:
 	lh $t5, 2($s6) # Get player y-val
 	add $t4, $t4, $t5 # array index = x + (y * WIDTH)
 	add $a3, $gp, $t4 # increment starting screen address by array index. 
-	
 	jal print_sprite_c
 
 main_frame_sleep:
@@ -347,11 +341,11 @@ print_sprite_c:
 # t6 - height counter
 # t7 - width counter
 
-	add $t0, $a0, $zero # Get the player's sprite address
-	add $t1, $a3, $zero # Get marker to the start of the screen
+	move $t0, $a0 # Get the player's sprite address
+	move $t1, $a3 # Get marker to the start of the screen
 	
 	li $t6, 0 # Initialize counter for height of player
-pspr_print_player:	
+pspr_print:	
 	bge $t6, $a2, pspr_end
 	
 	li $t7, 0 # Initialize counter for width of player
@@ -374,7 +368,7 @@ pspr_next_row:
 	sub $t1, $t1, $t4 # Go back to the left side of sprite to draw properly
 	
 	addi $t6, $t6, 1 # Increment height counter
-	j pspr_print_player	
+	j pspr_print	
 
 pspr_end:
 	jr $ra
@@ -385,7 +379,7 @@ move_object_c:
 # according to the given movement details.
 #
 # v0 -- The new location details of the object.
-# a0 -- 16-bit initial x/y location. 
+# a0 -- 16-bit initial x or y location. 
 # a1 -- movement details. This is a 2-bit value, with each bit having a different meaning.
 #					1b|0b
 #	0b = 1 if there will be movement. If this bit is 0, then the starting location will be returned.
@@ -407,18 +401,17 @@ move_object_c:
 	beqz $t4, mvob_end
 mvob_calculate:
 	# Get whether positive or negative movement
-	sll $t4, $a1, 14
-	sra $t4, $t4, 15 # t4 = 11...1 or 00...1 according to postive/negative movement bit
+	andi $t4, $a1, 0x2 # Consider only bit 1.
 
-	# We want t4 to be 11...1 or 00...0
-	# Move by +a2 if t4 = 1, -a2 if t4 = 0 => [(-a2) AND (~t4)] OR [(a2) AND (t4)]
-	add $t6, $a2, $zero
-	not $t6, $t6
-	addi $t6, $t6, 1 # t6 = -a2 (Two's complement)
-	not $t5, $t4
-	and $t5, $t5, $t6 # t5 = (-a2) AND (~t4)
-	and $t6, $t4, $a2 # t6 = (a2) AND (t4)
-	or $t0, $t5, $t6 # t0 = [(-a2) AND (~t4)] OR [(a2) AND (t4)]
+	beqz $t4, mvob_negative_movement # if movement bit is 0 => t4 is 0
+mvob_positive_movement:
+	move $t0, $a2 
+	j mvob_end
+mvob_negative_movement:
+	move $t0, $a2
+	not $t0, $t0
+	addi $t0, $t0, 1 # negative (Two's complement)
+	
 mvob_end:
 	add $v0, $a0, $t0
 	jr $ra
