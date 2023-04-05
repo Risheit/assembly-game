@@ -14,14 +14,14 @@
 # 
 # Which milestones have been reached in this submission? 
 # (See the assignment handout for descriptions of the milestones) 
-# - Milestone 1/2/3 (choose the one the applies) 
+# - Milestone 3 (choose the one the applies) 
 # 
 # Which approved features have been implemented for milestone 3? 
 # (See the assignment handout for the list of additional features) 
-# 1. (fill in the feature, if any) 
-# 2. (fill in the feature, if any) 
-# 3. (fill in the feature, if any) 
-# ... (add more if necessary) 
+# 1. Moving Platforms - 2
+# 2. Fail Condition - 1
+# 3. Start Menu - 1
+# 4.  
 # 
 # Link to video demonstration for final submission: 
 # - (insert YouTube / MyMedia / other URL here). Make sure we can view it! 
@@ -85,11 +85,12 @@
 .eqv KEY_A 0x61
 .eqv KEY_S 0x73
 .eqv KEY_D 0x64
+.eqv KEY_P 0x70
 
 ############################ GAME DATA ###############################
 
 # OBJECT INFORMATION
-.eqv MAX_OBJECTS 5		# The maximum number of objects (platforms/entities) allowed on 
+.eqv MAX_OBJECTS 10		# The maximum number of objects (platforms/entities) allowed on 
 				# the screen at once. (Array size of OBJECT_X arrays)
 
 OBJECT_LOCATIONS: .word 0:MAX_OBJECTS
@@ -156,6 +157,10 @@ OBJECT_DETAILS: .half 0:MAX_OBJECTS
 .eqv MAX_PLATFORM_LENGTH 6	# The maximum length each platform can be
 .eqv MIN_PLATFORM_LENGTH 4	# The minimum length each platform can be
 
+# LETTER INFORMATION
+.eqv LETTER_WIDTH 3
+.eqv LETTER_HEIGHT 4
+
 # SPRITES
 
 CLEAN_SPR: .word BLACK:32 	# A large sprite made entirely of black so that the print sprite function can be used 
@@ -171,6 +176,36 @@ PLAYER_SPR: .word BLACK, PLAYER_HEAD, BLACK,
 		  BLACK, PLAYER_LEGS, BLACK
 
 PLATFORM_SPR: .word BLOCKABLE:8		
+
+LETT_F_SPR: .word WHITE, WHITE, WHITE,
+		  WHITE, BLACK, BLACK,
+		  WHITE, WHITE, BLACK,
+		  WHITE, BLACK, BLACK
+		  
+LETT_A_SPR: .word WHITE, WHITE, WHITE,
+		  WHITE, BLACK, WHITE,
+		  WHITE, WHITE, WHITE,
+		  WHITE, BLACK, WHITE
+		  
+LETT_I_SPR: .word WHITE, WHITE, WHITE,
+		  BLACK, WHITE, BLACK,
+		  BLACK, WHITE, BLACK,
+		  WHITE, WHITE, WHITE
+
+LETT_L_SPR: .word WHITE, BLACK, BLACK,
+		  WHITE, BLACK, BLACK,
+		  WHITE, BLACK, BLACK,
+		  WHITE, WHITE, WHITE
+		  
+LETT_P_SPR: .word WHITE, WHITE, WHITE,
+		  WHITE, BLACK, WHITE,
+		  WHITE, WHITE, WHITE,
+		  WHITE, BLACK, BLACK
+		  
+LETT_Y_SPR: .word WHITE, BLACK, WHITE
+		  WHITE, BLACK, WHITE
+		  BLACK, WHITE, BLACK
+		  BLACK, WHITE, BLACK
 
 # DEBUG
 TEST_SPR: .word WHITE, PLAYER_HEAD, WHITE,
@@ -194,6 +229,8 @@ main:
 # s5 - CLEAN_LOCATIONS Array
 # s6 - OBJECT_LOCATIONS Array
 # s7 - OBJECT_DETAILS Array
+	
+	jal start_menu # Print start menu
 
 main_init:
 # Initialization Section
@@ -216,7 +253,7 @@ main_init:
 	la $a0, BORDER_SPR
 	li $a1, 1
 	li $a2, HEIGHT
-	addi $a3, $gp, 0 # left side
+	addi $a3, $gp, 0 # left side 
 	jal print_sprite_c
 	
 	addi $a3, $gp, WIDTH
@@ -256,10 +293,6 @@ main_init:
 	# Initialize platform details
 #	li $t4, 0x8491
 #	sh $t4, 4($s7) 	
-
-	li $v0, 1 # Debug int
-	li $a0, 2
-	syscall
 
 main_start_loop: 
 # Start of the main game loop
@@ -519,9 +552,24 @@ main_collisions_loop:
 	j main_collisions_loop_end # Do nothing on default
 			
 main_collision_player:
-main_player_on_platform:
-	# Check for a platform under the player's feet.
-	# Do this by moving down 4 units and right 1 unit from the player's screen address
+	# Stop player from going past top of screen
+	lh $t5, 2($s0) # Get y
+	bnez $t5, main_player_above_head # Skip if player not at top of the screen
+	
+main_player_at_top:
+	ori $s3, $s3, 0x1E00 # Set player at max jump, causing them to fall.
+
+main_player_above_head:
+	# Check up 1 unit and right 1 unit
+#	li $t4, 1
+#	sll $t4, $t4, UNIT_S
+#	add $t5, $s4, $t4 # Current object location + 1 right
+#	li $t4, 1
+#	sll $t4, $t4, WIDTH_S
+#	subi $t5, $t5, $t4 # Current object location + 1 up
+
+main_player_under_feet:
+	# Check down 4 units and right 1 unit from the player's screen address
 	li $t4, 1
 	sll $t4, $t4, UNIT_S
 	add $t5, $s4, $t4 # Current object location + 1 right
@@ -530,8 +578,11 @@ main_player_on_platform:
 	add $t5, $t5, $t4 # Current object location + 4 down
 
 	lw $t5, 0($t5) # Get colour at unit under player's feet
-	bne $t5, BLOCKABLE, main_player_at_right_wall # Skip if object under player isn't a platform
-	
+	beq $t5, BLOCKABLE, main_player_on_platform # Object under player is a platform
+	beq $t5, DEADLY, main_player_on_lava # Object under player is a lava
+	j main_player_at_right_wall
+
+main_player_on_platform:
 	# Stop player trying to move down on platform
 	srl $t4, $s3, 3 
 	andi $t4, $t4, 0x1 # Consider only up/down bit
@@ -540,6 +591,10 @@ main_player_on_platform:
 main_player_moving_down:
 	andi $s3, $s3, 0xE1FF # Set player's jump time to 0
 	andi $s3, $s3, 0xFFF3 # Prevent player from moving downwards
+	j main_player_at_right_wall
+
+main_player_on_lava:
+	jal end_game
 
 main_player_at_right_wall:
 	# Check for wall on right of player
@@ -581,9 +636,8 @@ main_player_at_left_wall:
 main_player_moving_left:
 	andi $s3, $s3, 0xFFFC # Prevent player from moving left
 	j main_update_collision
-
+	
 main_collision_platform:
-
 main_platform_at_right_wall:
 	andi $t4, $s3, 0x3 # 1b|0b = 11 iff right movement this frame
 	bne $t4, 0x3, main_platform_at_left_wall # Skip if no right movement
@@ -1206,3 +1260,89 @@ crcn_end:
 	jr $ra
 
 # check_row_conflicts_c
+
+end_game:
+# Prints the fail message to the screen and exits the game.
+
+	# Print F
+	la $a0, LETT_F_SPR
+	li $a1, LETTER_WIDTH
+	li $a2, LETTER_HEIGHT
+	li $a3, 0x10008348 # Hard code location of letter, since we know where it'll print
+	jal print_sprite_c
+	
+	# Print A
+	la $a0, LETT_A_SPR
+	li $a3, 0x10008354 # += 3 * unit
+	jal print_sprite_c
+
+	# Print I
+	la $a0, LETT_I_SPR
+	li $a3, 0x10008360
+	jal print_sprite_c
+	
+	# Print L
+	la $a0, LETT_L_SPR
+	li $a3, 0x1000836C
+	jal print_sprite_c
+
+	j main_end # Exit game
+# end_game
+
+start_menu:
+# Prints the start menu and waits for the user to press 'P' to start the game.
+
+# Registers in Use:
+# t0 - Key pressed
+# t4, t5 - Intermediate values between calculations
+
+	# Print P
+	la $a0, LETT_P_SPR
+	li $a1, LETTER_WIDTH
+	li $a2, LETTER_HEIGHT
+	li $a3, 0x10008348 # Hard code location of letter, since we know where it'll print
+	jal print_sprite_c
+	
+	# Print L
+	la $a0, LETT_L_SPR
+	li $a3, 0x10008354
+	jal print_sprite_c
+
+	# Print A
+	la $a0, LETT_A_SPR
+	li $a3, 0x10008360
+	jal print_sprite_c
+
+	# Print Y
+	la $a0, LETT_Y_SPR
+	li $a3, 0x1000836C
+	jal print_sprite_c
+	
+stme_wait_input:
+	la $t4, INPUT
+	lw $t5, 0($t4) # Check for input
+	beqz $t5, stme_wait_input # Wait if no input registered
+	lw $t0, 4($t4) # Load input
+	bne $t0, KEY_P, stme_wait_input # Wait if key != 'p'
+	
+	# Clean letters
+	la $a0, CLEAN_SPR # P
+	li $a1, LETTER_WIDTH
+	li $a2, LETTER_HEIGHT
+	li $a3, 0x10008348 # Hard code location of letter, since we know where it'll print
+	jal print_sprite_c
+	
+	la $a0, CLEAN_SPR # L
+	li $a3, 0x10008354
+	jal print_sprite_c
+
+	la $a0, CLEAN_SPR # A
+	li $a3, 0x10008360
+	jal print_sprite_c
+
+	la $a0, CLEAN_SPR # Y
+	li $a3, 0x1000836C
+	jal print_sprite_c
+
+	j main_init # Re-initialize all values
+# start_game
