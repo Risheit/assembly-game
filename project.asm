@@ -56,13 +56,13 @@
 
 # BITMAP DETAILS
 .eqv WIDTH 64		# Width of the bitmap display in pixels
-.eqv WIDTH_U 16		# Width of the bitmap display in units
+.eqv WIDTH_U 16		# Width of the bitmap display in units (starts at 0)
 .eqv WIDTH_S 6		# The shift equivalent to scaling by width (val * WIDTH == val << WIDTH_S)
 .eqv HEIGHT 128		# Height of the bitmap display in pixels
-.eqv HEIGHT_U 32	# Height of the bitmap display in pixels
+.eqv HEIGHT_U 32	# Height of the bitmap display in pixels (starts at 0)
 .eqv UNIT 4		# Size of one unit in pixels
 .eqv UNIT_S 2		# The shift equivalent to scaling by a unit (val * UNIT == val << UNIT_S)
-.eqv FRAME_DELAY 70
+.eqv FRAME_DELAY 80
 
 # COLOURS 
 .eqv WHITE 		0x00ffffff
@@ -89,7 +89,7 @@
 ############################ GAME DATA ###############################
 
 # OBJECT INFORMATION
-.eqv MAX_OBJECTS 2		# The maximum number of objects (platforms/entities) allowed on 
+.eqv MAX_OBJECTS 5		# The maximum number of objects (platforms/entities) allowed on 
 				# the screen at once. (Array size of OBJECT_X arrays)
 
 OBJECT_LOCATIONS: .word 0:MAX_OBJECTS
@@ -128,8 +128,9 @@ OBJECT_DETAILS: .half 0:MAX_OBJECTS
 #	 bits 9-12 act as a regular 4-bit value representing the distance that the player has jumped so far.
 #	PLATFORM:
 #	 bits 7-9 act as a regular 3-bit value representing the length of the platform.
-#	 bits 10-12 acts as a regular 3-bit value representing how much of the platform is currently 
-#	 visible on the screen. 
+#	 bits 10-11 act as a regular 2-bit value representing the number of frames that will pass before this platform moves.
+#	 bits 12-13 act as a regular 2-bit counter representing the number of frames that have passed since this platform has moved. 
+# 	  NOTE: Rightwards movement is unimplemented for platforms.
 #	FIRE WALL:
 #	 bits 7-8 act as a regular 2-bit value representing the height of the wall.
 #	LAVA FISH:
@@ -149,6 +150,11 @@ OBJECT_DETAILS: .half 0:MAX_OBJECTS
 
 .eqv INITIAL_HP 3		# The initial health that the player starts with
 .eqv MAX_JUMP_HEIGHT 10		# The maximum height that the player can jump
+
+# PLATFORM INFORMATION
+
+.eqv MAX_PLATFORM_LENGTH 6	# The maximum length each platform can be
+.eqv MIN_PLATFORM_LENGTH 4	# The minimum length each platform can be
 
 # SPRITES
 
@@ -226,20 +232,34 @@ main_init:
 	sh $t4, 2($s6) # Store y position * width
 	
 	# Initialize player details
-	li $t4, 0x8100 # 1 000 000 10 000 0000 initializes active player with 3 health.
+	li $t4, 0x8100 # Initializes active player with 3 health.
 	sh $t4, 0($s7)
 	
 	# Initialize initial platform location
-	li $t4, 5 # Platform's x-position accounting for sprite size (in units, screen goes from 0 - WIDTH_U)
+	li $t4, 5 # Platform's x-position accounting for sprite size (in units, screen goes from 0 - (WIDTH_U - 1))
 	sll $t4, $t4, UNIT_S
 	sh $t4, 4($s6) # Store x position * unit 
-	li $t4, 24 # platform's y-position accounting for sprite size (in units, screen goes from 0 - HEIGHT_U)
+	li $t4, 24 # platform's y-position accounting for sprite size (in units, screen goes from 0 - (HEIGHT_U - 1))
 	sll $t4, $t4, WIDTH_S
 	sh $t4, 6($s6) # Store y
-	
 	# Initialize platform details
-	li $t4, 0x8E90 # 1 00 011 011 001 0000 initializes a starting platform with length of 5
+	li $t4, 0x8E93 # Initializes a starting platform with length of 5 moving right every 3 frames
 	sh $t4, 2($s7) 	
+
+	# Initialize initial platform location
+#	li $t4, 14 # Platform's x-position accounting for sprite size (in units, screen goes from 0 - (WIDTH_U - 1))
+#	sll $t4, $t4, UNIT_S
+#	sh $t4, 8($s6) # Store x position * unit 
+#	li $t4, 15 # platform's y-position accounting for sprite size (in units, screen goes from 0 - (HEIGHT_U - 1))
+#	sll $t4, $t4, WIDTH_S
+#	sh $t4, 10($s6) # Store y	
+	# Initialize platform details
+#	li $t4, 0x8491
+#	sh $t4, 4($s7) 	
+
+	li $v0, 1 # Debug int
+	li $a0, 2
+	syscall
 
 main_start_loop: 
 # Start of the main game loop
@@ -303,17 +323,23 @@ main_drawing_loop_end:
 
 main_handle_drawing_end:
 
+
+
 main_handle_input:
 # Handle input passed in by the player.
 	
 # Registers overwritten:
 # s0 - Keyboard input
 
+	lh $t4, 0($s7)
+	andi $t4, $t4, 0xFFF0 # Set movement bits to 0
+	sh $t4, 0($s7) # Set current movement bits to 0
+
 	la $t4, INPUT
 	lw $t5, 0($t4) # Check for input
 	beqz $t5, main_handle_input_end # Skip if no input registered
 	lw $s0, 4($t4) # Load input
-	
+				
 main_input_w:
 	bne $s0, KEY_W, main_input_a # Skip if key != 'w'
 	lw $t4, 0($s7) # Get player details
@@ -330,23 +356,25 @@ main_input_w:
 main_input_a:
 	bne $s0, KEY_A, main_input_s # Skip if key != 'a'
 	lw $t4, 0($s7) # Get player details
-	ori $t4, $t4, 0x1 # X XX XXXX XX XXX XX01 Set player to move left.
+	ori $t4, $t4, 0x1 # Set player to move left.
 	sw $t4, 0($s7) # Update player details
 	j main_handle_input_end
 
-main_input_s:
+main_input_s: # Quick fall key
 	bne $s0, KEY_S, main_input_d # Skip if key != 's'
 	lw $t4, 0($s7) # Get player details
-	ori $t4, $t4, 0xF00 # X XX 1111 XX XXX XXXX Set player at max jump, causing them to fall.
+	ori $t4, $t4, 0x1E00 # Set player at max jump, causing them to fall.
 	sw $t4, 0($s7) # Update player details
 	j main_handle_input_end
 
 main_input_d:
 	bne $s0, KEY_D, main_handle_input_end # Skip if key != 'd'
 	lw $t4, 0($s7) # Get player details
-	ori $t4, $t4, 0x3 # X XX XXXX XX XXX XX11 Set player to move up.
+	ori $t4, $t4, 0x3 # Set player to move up.
 	sw $t4, 0($s7) # Update player details
 main_handle_input_end:
+	
+	
 	
 main_handle_physics:
 # Handle the physics of the game.
@@ -370,14 +398,21 @@ main_physics_loop:
 	add $t4, $t4, $t5 # array index = x + (y * WIDTH)
 	add $s4, $gp, $t4 # increment starting screen address by array index. 
 
-	# We don't need to check object existance, since it is checked when printing.	
 	lh $s3, 0($s1) # Load object details
 
-main_player_jump_physics:
+	srl $t3, $s3, 15 # Existance bit
+	beqz $t3, main_physics_loop_end # Skip if object doesn't exist
+
 	srl $t4, $s3, 4 
 	andi $t4, $t4, 0x7 # Consider only bits 4-6
-	bnez $t4, main_physics_loop_end # Ignore section if object isn't a player
+	
+	beq $t4, 0, main_player_jump_physics
+	beq $t4, 1, main_platform_physics
+#	beq $t4, 2, gobs_firewall_spr
+#	beq $t4, 3, gobs_fish_spr
+#	beq $t4, 4, gobs_pigeon_spr
 
+main_player_jump_physics:
 	# Set up and down movement based on what state of jump the player is on
 	srl $t4, $s3, 9 
 	andi $t4, $t4, 0xF # Consider bits 9-12 (jump status)
@@ -388,19 +423,42 @@ main_player_jump_physics:
 	j main_player_descending
 	
 main_player_ascending:
-	ori $s3, $s3, 0x4 # X XX XXXX XX XXX 01XX Set player to move up.
+	ori $s3, $s3, 0x4 #Set player to move up.
 	addi $t4, $t4, 1 # Increase jump height
 	sll $t4, $t4, 9 # Move bits to where they should be
 	andi $s3, $s3, 0xE1FF
 	or $s3, $s3, $t4 # Set updated jump height
-	j main_update_directions
+	j main_update_object
 	
 main_player_descending:
-	ori $s3, $s3, 0xC # X XXX XXX XX XXX 11XX Set player to move down.
+	ori $s3, $s3, 0xC # Set player to move down.
+	j main_update_object
+
+main_platform_physics:
+	# Set platform movement according bits 10-13.
+	srl $t4, $s3, 10
+	andi $t4, $t4, 0x3 # Get time until movement
+
+	srl $t5, $s3, 12
+	andi $t5, $t5, 0x3 # Get frames passed since movement
 	
-main_update_directions:
+	beq $t5, $t4, main_platform_moves # Set platform to move if enough time has passed
+	
+main_increase_platform_wait:
+	addi $t5, $t5, 1 # Increase wait time by 1
+	sll $t5, $t5, 12
+	andi $s3, $s3, 0xCFFE # Mask away wait time for setting and set x-movement bit to 0
+	or $s3, $s3, $t5 # Update wait time
+	j main_update_object
+	
+main_platform_moves:
+	andi $s3, $s3, 0xCFFF # Set wait time to 0
+	ori $s3, $s3, 0x0001 # Set platform to move
+	j main_update_object
+
+main_update_object:
 	sh $s3, 0($s1)
-	
+
 main_physics_loop_end:
 
 	addi $s0, $s0, 4 # Increment by word
@@ -410,6 +468,8 @@ main_physics_loop_end:
 	j main_physics_loop
 
 main_handle_physics_end:
+	
+	
 	
 main_handle_collisions:
 # Handle collision detection to ensure no game objects make invalid movements.
@@ -442,8 +502,10 @@ main_collisions_loop:
 	add $t4, $t4, $t5 # array index = x + (y * WIDTH)
 	add $s4, $gp, $t4 # increment starting screen address by array index. 
 
-	# We don't need to check object existance, since it is checked when printing.	
 	lh $s3, 0($s1) # Load object details
+	
+	srl $t3, $s3, 15 # Existance bit
+	beqz $t3, main_collisions_loop_end # Skip if object doesn't exist
 	
 	# Get which object is being asked for
 	srl $t4, $s3, 4
@@ -454,7 +516,8 @@ main_collisions_loop:
 	beq $t4, 2, main_collision_firewall
 	beq $t4, 3, main_collision_fish
 	beq $t4, 4, main_collision_pigeon
-	
+	j main_collisions_loop_end # Do nothing on default
+			
 main_collision_player:
 main_player_on_platform:
 	# Check for a platform under the player's feet.
@@ -509,23 +572,88 @@ main_player_at_left_wall:
 	add $t5, $t5, $t4 # Current object location + 4 down
 
 	lw $t5, 0($t5) # Get colour at unit left of player
-	bne $t5, BLOCKABLE, main_player_save_collision # Skip if object isn't at a wall
+	bne $t5, BLOCKABLE, main_update_collision # Skip if object isn't at a wall
 	
 	srl $t4, $s3, 1
 	andi $t4, $t4, 0x1 # Consider only left/right bit
-	beq $t4, 0x1, main_player_save_collision # Player not moving left
+	beq $t4, 0x1, main_update_collision # Player not moving left
 
 main_player_moving_left:
 	andi $s3, $s3, 0xFFFC # Prevent player from moving left
-
-main_player_save_collision:
-	sh $s3, 0($s1) # Store updated movement
-	j main_collisions_loop_end
+	j main_update_collision
 
 main_collision_platform:
+
+main_platform_at_right_wall:
+	andi $t4, $s3, 0x3 # 1b|0b = 11 iff right movement this frame
+	bne $t4, 0x3, main_platform_at_left_wall # Skip if no right movement
+	
+	srl $t4, $s3, 7
+	andi $t4, $t4, 0x7 # Get length of platform
+	
+	# Check for wall at right of platform (platform width + 1 units to the right)
+	sll $t6, $t4, UNIT_S # width * units
+	add $t6, $s4, $t6
+	lw $t5, 0($t6) # Get colour at right of platform
+	bne $t5, BLOCKABLE, main_platform_at_left_wall # Skip if no wall 
+	
+	subi $t4, $t4, 1 # Decrease length by 1
+	sll $t4, $t4, 7
+	andi $s3, $s3, 0xFC7F
+	or $s3, $s3, $t4 # Update platform length
+	
+	sgt $t5, $t4, $zero # Get if platform has completely moved into the wall
+	sll $t5, $t5, 15
+	ori $t5, $t5, 0x7FFF # Only affect bit 15
+	and $s3, $s3, $t5 # Delete platform if it has completely passed through
+	
+	# Fix issue with final unit not being cleaned by manually cleaning the last bit
+	bnez $t4, main_finish_right_wall
+	li $t5, BLACK
+	sw $t5, 0($s4)
+
+main_finish_right_wall:
+	j main_update_collision
+	
+main_platform_at_left_wall:
+	andi $t4, $s3, 0x3 # 1b|0b = 01 iff left movement this frame
+	bne $t4, 0x1, main_collisions_loop_end # Skip if no left movement
+
+	# Check for wall at left of platform (1 unit to the left)
+	subi $t5, $s4, UNIT # One unit to the left
+	lw $t5, 0($t5) # Colour left of platform
+	bne $t5, BLOCKABLE, main_collisions_loop_end
+
+	andi $s3, $s3, 0xFFFE # Set no x-movement this frame (we simulate it by decreasing the platform width from the left)
+
+	srl $t4, $s3, 7
+	andi $t4, $t4, 0x7 # Get length of platform
+		
+	subi $t4, $t4, 1 # Decrease length by 1
+	sll $t5, $t4, 7
+	andi $s3, $s3, 0xFC7F
+	or $s3, $s3, $t5 # Update platform length
+	
+	# Clean up the unit that will be removed from the platform
+	sll $t6, $t4, UNIT_S # width * units
+	add $t6, $s4, $t6
+	li $t5, BLACK
+	sw $t5, 0($t6) # Get colour at right of platform
+
+	
+	sgt $t5, $t4, $zero # Get if platform has completely moved into the wall
+	sll $t5, $t5, 15
+	ori $t5, $t5, 0x7FFF # Only affect bit 15
+	and $s3, $s3, $t5 # Delete platform if it has completely passed through
+	j main_update_collision
+
 main_collision_firewall:
 main_collision_fish:
 main_collision_pigeon:
+
+main_update_collision:
+	sh $s3, 0($s1) # Store updated movement
+	j main_collisions_loop_end
 
 main_collisions_loop_end:
 
@@ -536,6 +664,240 @@ main_collisions_loop_end:
 	j main_collisions_loop
 	
 main_handle_collisions_end:
+
+
+
+main_handle_objects:
+# Introduce new objects into the game world and remove unneeded ones.
+
+# Registers overwritten:
+# s0 - Object location address incremented by loop
+# s1 - Object details address incremented by loop
+# s2 - Loop index
+# s3 - Details of current object
+# s4 - Screen location of current object
+
+	move $s0, $s6 # Load initial location address
+	move $s1, $s7 # Load initial details address
+	li $s2, 0
+main_objects_loop:
+	beq $s2, MAX_OBJECTS, main_handle_objects_end # loop while s2 < MAX_OBJECTS
+
+	# Store current screen address of object
+	lh $t4, 0($s0) # Get object x-val
+	lh $t5, 2($s0) # Get object y-val
+	add $t4, $t4, $t5 # array index = x + (y * WIDTH)
+	add $s4, $gp, $t4 # increment starting screen address by array index. 
+
+	lh $s3, 0($s1) # Load object details
+	
+	# Platforms, fish, etc. need to be introduced unit by unit. In the case that they are in the process
+	# of being introduced, handle_objects will slowly introduce the entire object.
+	# Check object existance
+	srl $t3, $s3, 15 # Existance bit
+	beqz $t3, main_init_object # If object doesn't exist, initialize it 
+	
+	# Get type of existing object
+	srl $t4, $s3, 4
+	andi $t4, $t4, 0x7 # Only consider bits 4-6 to get type of object
+	
+#	beq $t4, 0, main_collision_player
+	beq $t4, 1, main_continue_platform_add
+#	beq $t4, 2, main_collision_firewall
+#	beq $t4, 3, main_collision_fish
+#	beq $t4, 4, main_collision_pigeon
+	j main_objects_loop_end # Do nothing if invalid object
+
+main_continue_platform_add:
+	# If platform is touching a wall and moving away from it, it is still in the process
+	# of being introduced. Here we decide whether or not to increase the size of the platform as it is being
+	# introduced, or to finish introducing it and let it go. We also ensure that no platforms smaller than
+	# the minimum size or larger than the maximum size are introduced.
+	
+main_add_platform_right:
+	andi $t4, $s3, 0x3 # 1b|0b = 01 iff left movement this frame
+	bne $t4, 0x1, main_add_platform_left # Skip if no left movement
+
+	srl $t4, $s3, 7
+	andi $t4, $t4, 0x7 # Get length of platform
+
+	# Check for wall at right of platform (platform width + 1 units to the right)
+	sll $t6, $t4, UNIT_S # width * units
+	add $t6, $s4, $t6
+	lw $t5, 0($t6) # Get colour at right of platform
+	bne $t5, BLOCKABLE, main_add_platform_left # Skip if no wall 
+
+	li $t5, MIN_PLATFORM_LENGTH
+	blt $t4, $t5, main_incr_length_on_left # Always increase length before min length reached
+	li $t5, MAX_PLATFORM_LENGTH
+	bge $t4, $t5, main_objects_loop_end # Don't increase length after max length reached
+
+	li $v0, 42 # Random
+	li $a0, 0
+	li $a1, 2
+	syscall # range 0 - 1
+	beqz $a0, main_incr_length_on_left # Increase platform length randomly
+	
+	j main_objects_loop_end # Default to not increasing platform length
+	
+main_incr_length_on_left:
+	addi $t4, $t4, 1 # Increase length by 1
+	sll $t4, $t4, 7
+	andi $s3, $s3, 0xFC7F
+	or $s3, $s3, $t4 # Update platform length
+	
+	# Bandaid fix with the program cleaning up part of the wall.
+	# Move the block left manually without cleaning. We know that we're not on the left edge of the screen,
+	# so we can forgo validity checks.
+	lh $a0, 0($s0)
+	andi $a1, $s3, 0x3 # Consider only 0b and 1b in object details
+	li $a2, UNIT # Move by one unit
+	jal move_object_c
+	sh $v0, 0($s0) # Update location
+	andi $s3, $s3, 0xFFFE # Set no x-movement this frame since we did it manually
+	
+	j main_store_object
+
+main_add_platform_left:
+	andi $t4, $s3, 0x3 # 1b|0b = 11 iff right movement this frame
+	bne $t4, 0x3, main_objects_loop_end # Skip if no right movement
+	
+	# Check for wall at left of platform (1 unit to the left)
+	subi $t5, $s4, UNIT # One unit to the left
+	lw $t5, 0($t5) # Colour left of platform
+	bne $t5, BLOCKABLE, main_objects_loop_end
+
+	srl $t4, $s3, 7
+	andi $t4, $t4, 0x7 # Get length of platform
+
+	li $t5, MIN_PLATFORM_LENGTH
+	blt $t4, $t5, main_incr_length_on_right # Always increase length before min length reached
+	li $t5, MAX_PLATFORM_LENGTH
+	bge $t4, $t5, main_objects_loop_end # Don't increase length after max length reached
+
+	li $v0, 42 # Random
+	li $a0, 0
+	li $a1, 4
+	syscall # Range 0 - 3
+	beqz $a0, main_incr_length_on_right # Increase platform length randomly
+	
+	j main_objects_loop_end # Default to not increasing platform length
+
+main_incr_length_on_right:	
+	andi $s3, $s3, 0xFFFE # Set no x-movement this frame (we simulate it by increasing the platform width from the left)
+	
+	srl $t4, $s3, 7
+	andi $t4, $t4, 0x7 # Get length of platform
+		
+	addi $t4, $t4, 1 # Increase length by 1
+	sll $t5, $t4, 7
+	andi $s3, $s3, 0xFC7F
+	or $s3, $s3, $t5 # Update platform length
+	
+	j main_store_object
+
+main_init_object:
+	# When picking what object to introduce, we follow this logic:
+	# 	If indexes 1, 2 and 3 are free, add a new platform in them -> Ensures at least 3 platforms at all times
+	#	For other free indexes, have 1/2 chance of introducing an object
+	#		When object is being introduced pick an object (not including a player object) with 
+	#		equal probability of each object.
+
+	ble $s2, 3, main_init_platform # Indexes 1, 2, or 3 is free
+	
+	li $v0, 42 # Random
+	li $a0, 0
+	li $a1, 2
+	syscall # range (0 - 1)
+	
+	beqz $a0, main_objects_loop_end # Don't add object
+	
+	li $v0, 42 # Random
+	li $a0, 0
+	li $a1, 4
+	syscall
+	addi $a1, $a1, 1 # range 1 - 4
+	
+	beq $a0, 1, main_init_platform
+#	beq $a0, 2, main_init_firewall
+#	beq $a0, 3, main_init_lavafish
+#	beq $a0, 4, main_init_pigeon
+	j main_objects_loop_end # Default do nothing
+
+main_init_platform:
+	bgt $s2, 4, main_objects_loop_end # No more than 4 possible platforms at a time
+
+	# Randomly pick a row. If it is within 3 rows of another row holding a platform,
+	# pick again
+	li $v0, 42
+	li $a0, 0
+	li $a1, 20 # Leave buffer on bottom
+	syscall
+	addi $a0, $a0, 6 # Leave buffer on top (range 6 - 26)
+	
+	sll $a0, $a0, WIDTH_S # Get row to look at
+	li $a1, 2 # 2 rows between them minimum
+	li $a2, 0x1 # Platform
+	jal check_row_conflicts_c
+	
+	beq $v0, 1, main_init_platform # Loop if conflict exists
+	
+	sh $a0, 2($s0) # Store y
+	
+	# Store object details
+	li $s3, 0x8090 # Base platform
+	
+	li $v0, 42
+	li $a0, 0
+	li $a1, 3
+	syscall 
+	addi $a0, $a0, 1 # Get platform speed (range 1 - 3) 
+	sll $t4, $a0, 10
+	or $s3, $s3, $t4 # Update platform speed
+	
+	li $v0, 42
+	li $a0, 0
+	li $a1, 2
+	syscall # Get right (0) or left (1) starting location
+	# Set movement based on starting location (0/1 = left/right)
+	sll $t4, $a0, 1
+	or $s3, $s3, $t4 # Update platform movement direction
+			
+	beqz $a0, main_platform_starts_right # Set left/right starting location
+main_platform_starts_left:
+	li $t4, UNIT # Start left wall
+	sh $t4, 0($s0) # Store x
+	j main_store_object
+
+main_platform_starts_right:
+	li $t4, WIDTH
+	subi $t4, $t4, UNIT # UNIT - WIDTH => 0 - (WIDTH - UNIT)
+	subi $t4, $t4, UNIT # Start right wall
+	sh $t4, 0($s0) # Store x
+	j main_store_object
+	
+
+main_init_firewall:
+main_init_lavafish:
+main_init_pigeon:
+
+main_store_object:
+	li $v0, 1 # Debug int
+	li $a0, 1
+	syscall
+	
+	sh $s3, 0($s1)
+
+main_objects_loop_end:
+	addi $s0, $s0, 4 # Increment by word
+	addi $s1, $s1, 2 # Increment by halfword
+
+	addi $s2, $s2, 1
+	j main_objects_loop
+
+main_handle_objects_end:
+
+
 
 main_handle_movement:
 # Handle the movement of every object based on their details.
@@ -562,13 +924,13 @@ main_movement_loop:
 	# We don't need to check object existance, since it is checked when printing.	
 	lh $s3, 0($s1) # Load object details
 
-main_handle_x_movement:
+main_x_movement:
 	lh $a0, 0($s0)
 	andi $a1, $s3, 0x3 # Consider only 0b and 1b in object details
 	li $a2, UNIT # Move by one unit
 	jal move_object_c
 
-	beq $v0, $a0, main_handle_y_movement # Decrease jitter by not updating the object unless it has moved
+	beq $v0, $a0, main_y_movement # Decrease jitter by not updating the object unless it has moved
 
 	# Set current location of object to be cleaned if there was x movement
 	sll $t4, $s2, 2 # Get index of element in object arrays
@@ -577,10 +939,10 @@ main_handle_x_movement:
 	
 	sh $v0, 0($s0) # Update location
 	li $t4, 0
-	andi $s3, $s3, 0xFFFC # Set x-movement bit and left/right bit to 0
-	sh $s3, 0($s1) # Update object details
+#	andi $s3, $s3, 0xFFFC # Set x-movement bit and left/right bit to 0
+#	sh $s3, 0($s1) # Update object details
 	
-main_handle_y_movement:
+main_y_movement:
 	lh $a0, 2($s0)
 	andi $a1, $s3, 0xC # Consider only 2b and 3b in object details
 	srl $a1, $a1, 2
@@ -596,8 +958,8 @@ main_handle_y_movement:
 
 	sh $v0, 2($s0) # Update location
 	li $t4, 0
-	andi $s3, $s3, 0xFFF3 # Set y-movement and up/down bit to 0
-	sh $s3, 0($s1) # Update object details
+#	andi $s3, $s3, 0xFFF3 # Set y-movement and up/down bit to 0
+#	sh $s3, 0($s1) # Update object details
 	
 main_movement_loop_end:
 
@@ -609,8 +971,7 @@ main_movement_loop_end:
 
 main_handle_movement_end:
 
-main_handle_objects:
-# Introduce new objects into the game world and remove unneeded ones.
+
 
 main_frame_sleep:
 # Sleep for a0 milliseconds
@@ -763,7 +1124,7 @@ gobs_player_spr:
 	
 gobs_platform_spr:
 	la $a0, PLATFORM_SPR
-	srl $a1, $a3, 7 # Make bits 7-9 the smallest bits
+	srl $a1, $a3, 7 
 	andi $a1, $a1, 0x7 # Consider only bits 7-9 as a three bit value for platform width
 	li $a2, 1
 	jr $ra
@@ -786,3 +1147,62 @@ gobs_pigeon_spr:
 	li $a2, PLAYER_HEIGHT
 	jr $ra	# Unimplemented
 	
+# get_object_spr
+
+check_row_conflicts_c:
+# Returns 1 if it finds a type of object within a given number of rows next to another given row.
+# The row a0 given should be in the form (y-val in units * WIDTH).
+#
+# v0 -- 1 if there is a row conflict, 0 otherwise.
+# a0 -- The row that is being searched for a conflict along with it's neighbours.
+# a1 -- The number of rows above/below the row a0 to search for a conflict for as well.
+# a2 -- The object type being searched for. Given as 3 bit value.
+
+# Registers in Use:
+# t0 - Object location address incremented by loop
+# t1 - Object details address incremented by loop
+# t2 - Loop index
+# t3, t4, t5 - Intermediate values between calculations
+
+	move $t0, $s6 # Load initial location address
+	move $t1, $s7 # Load initial details address
+	li $t2, 0 
+	li $v0, 0
+crcn_loop:
+	beq $t2, MAX_OBJECTS, crcn_end # loop while t2 < MAX_OBJECTS
+
+	lh $t4, 0($t1) # Load object details
+
+	srl $t5, $t4, 15 # Existance bit
+	beqz $t5, crcn_loop_end # Skip if object doesn't exist
+
+	srl $t3, $t4, 4 
+	andi $t3, $t3, 0x7 # Consider only bits 4-6
+	bne $t3, $a2, crcn_loop_end # Skip if not the object type we're considering
+
+	# Check if |o1 - o2| <= a1 * WIDTH <-- Since objects are in a WIDTH form	
+	lh $t4, 2($t0) # Load y-val
+	sub $t4, $t4, $a0 # d = object's row - this row
+	
+	# The idea for non-branching abs() is from here
+	# https://stackoverflow.com/questions/2639173/x86-assembly-abs-implementation
+	sra $t3, $t4, 31 # y = -1 or 0
+	xor $t4, $t4, $t3 # x XOR y
+	sub $t4, $t4, $t3 # |d| = (x XOR y) - y
+	
+	sll $t5, $a1, WIDTH_S # a1 * WIDTH
+	bgt $t4, $t5, crcn_loop_end # No collision found
+	li $v0, 1 # Collision found
+	j crcn_end # Break
+	
+crcn_loop_end:
+	addi $t0, $t0, 4 # Increment by word
+	addi $t1, $t1, 2 # Increment by halfword
+
+	addi $t2, $t2, 1
+	j crcn_loop
+
+crcn_end:
+	jr $ra
+
+# check_row_conflicts_c
