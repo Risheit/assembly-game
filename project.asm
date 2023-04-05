@@ -67,6 +67,7 @@
 # COLOURS 
 .eqv WHITE 		0x00ffffff
 .eqv BLACK		0x00000000
+.eqv ACCENT		0x004579cc	# Accent colour 
 
 .eqv PLAYER_HEAD 	0x00ffb100
 .eqv PLAYER_BODY 	0x00bA6314
@@ -78,6 +79,7 @@
 				    	# upon collision.
 .eqv DEADLY		0x00e6330b  	# This colour represents objects that immediately kill the 
 					# player upon collision.
+
 
 # KEYPRESSES
 .eqv INPUT 0xffff0000
@@ -163,7 +165,7 @@ OBJECT_DETAILS: .half 0:MAX_OBJECTS
 
 # SPRITES
 
-CLEAN_SPR: .word BLACK:32 	# A large sprite made entirely of black so that the print sprite function can be used 
+CLEAN_SPR: .word BLACK:WIDTH 	# A large sprite made entirely of black so that the print sprite function can be used 
 				# with it and varying widths/heights to clean other sprites as they move
 				
 BORDER_SPR: .word BLOCKABLE:HEIGHT	# The blocking border wall around the screen to prevent crossing past the sides of the screen
@@ -201,7 +203,12 @@ LETT_P_SPR: .word WHITE, WHITE, WHITE,
 		  WHITE, BLACK, WHITE,
 		  WHITE, WHITE, WHITE,
 		  WHITE, BLACK, BLACK
-		  
+
+LETT_P_ACC_SPR: .word ACCENT, ACCENT, ACCENT,
+		      ACCENT, BLACK, ACCENT,
+		      ACCENT, ACCENT, ACCENT,
+		      ACCENT, BLACK, BLACK
+		  		  
 LETT_Y_SPR: .word WHITE, BLACK, WHITE
 		  WHITE, BLACK, WHITE
 		  BLACK, WHITE, BLACK
@@ -234,11 +241,44 @@ main:
 
 main_init:
 # Initialization Section
+
+# Registers overwritten:
+# s1 - Object details address incremented by loop
+# s2 - Loop index
 	
 	la $s5, CLEAN_LOCATIONS
 	la $s6, OBJECT_LOCATIONS
 	la $s7, OBJECT_DETAILS 
 
+	
+	li $s2, 0 # Loop counter
+	la $a0, CLEAN_SPR
+	li $a1, WIDTH # Clean whole row
+	li $a2, 1 # 1 row at a time 
+	move $a3, $gp # Print from start of row to end
+main_init_clean: # Wipe entire screen
+	bge $s2, HEIGHT_U, main_init_clean_end
+	jal print_sprite_c
+	
+	addi $s2, $s2, 1
+	add $a3, $a3, WIDTH # Next row
+	j main_init_clean
+main_init_clean_end:
+
+	li $s2, 0 # Loop counter
+	move $s1, $s7 # Load initial objects
+main_init_arrays: # Set object detail arrays to 0
+	bge $s2, MAX_OBJECTS, main_init_arrays_end
+	lh $t4, 0($s1)
+	andi $t4, $t4, 0x7FFF # Set existance bit to 0
+	sh $t4, 0($s1) # Update
+	
+	addi $s2, $s2, 1
+	add $s1, $s1, 2 # Increment by halfword
+	j main_init_arrays
+main_init_arrays_end:
+
+main_init_draw:
 	# Draw borders
 	la $a0, LAVA_SPR
 	li $a1, 16
@@ -401,10 +441,16 @@ main_input_s: # Quick fall key
 	j main_handle_input_end
 
 main_input_d:
-	bne $s0, KEY_D, main_handle_input_end # Skip if key != 'd'
+	bne $s0, KEY_D, main_input_p # Skip if key != 'd'
 	lw $t4, 0($s7) # Get player details
 	ori $t4, $t4, 0x3 # Set player to move up.
 	sw $t4, 0($s7) # Update player details
+	j main_handle_input_end
+	
+main_input_p:
+	bne $s0, KEY_P, main_handle_input_end # Skip if key != 'p'
+	j main_init # Restart game
+	
 main_handle_input_end:
 	
 	
@@ -935,11 +981,7 @@ main_init_firewall:
 main_init_lavafish:
 main_init_pigeon:
 
-main_store_object:
-	li $v0, 1 # Debug int
-	li $a0, 1
-	syscall
-	
+main_store_object:	
 	sh $s3, 0($s1)
 
 main_objects_loop_end:
@@ -1285,8 +1327,40 @@ end_game:
 	la $a0, LETT_L_SPR
 	li $a3, 0x1000836C
 	jal print_sprite_c
+	
+	# Print key to press (P)
+	la $a0, LETT_P_ACC_SPR
+	li $a3, 0x10008518
+	jal print_sprite_c
 
-	j main_end # Exit game
+
+engm_wait_input: # Wait for p to restart game
+	la $t4, INPUT
+	lw $t5, 0($t4) # Check for input
+	beqz $t5, stme_wait_input # Wait if no input registered
+	lw $t0, 4($t4) # Load input
+	bne $t0, KEY_P, stme_wait_input # Wait if key != 'p'
+	
+	# Clean letters
+#	la $a0, CLEAN_SPR # P
+#	li $a1, LETTER_WIDTH
+#	li $a2, LETTER_HEIGHT
+#	li $a3, 0x10008348
+#	jal print_sprite_c
+	
+#	la $a0, CLEAN_SPR # L
+#	li $a3, 0x10008354
+#	jal print_sprite_c
+
+#	la $a0, CLEAN_SPR # A
+#	li $a3, 0x10008360
+#	jal print_sprite_c
+
+#	la $a0, CLEAN_SPR # Y
+#	li $a3, 0x1000836C
+#	jal print_sprite_c
+
+	j main_init # Re-initialize all values
 # end_game
 
 start_menu:
@@ -1318,6 +1392,11 @@ start_menu:
 	li $a3, 0x1000836C
 	jal print_sprite_c
 	
+	# Print key to press (P)
+	la $a0, LETT_P_ACC_SPR
+	li $a3, 0x10008518
+	jal print_sprite_c
+	
 stme_wait_input:
 	la $t4, INPUT
 	lw $t5, 0($t4) # Check for input
@@ -1326,23 +1405,22 @@ stme_wait_input:
 	bne $t0, KEY_P, stme_wait_input # Wait if key != 'p'
 	
 	# Clean letters
-	la $a0, CLEAN_SPR # P
-	li $a1, LETTER_WIDTH
-	li $a2, LETTER_HEIGHT
-	li $a3, 0x10008348 # Hard code location of letter, since we know where it'll print
-	jal print_sprite_c
+#	la $a0, CLEAN_SPR # P
+#	li $a2, LETTER_HEIGHT
+#	li $a3, 0x10008348 
+#	jal print_sprite_c
 	
-	la $a0, CLEAN_SPR # L
-	li $a3, 0x10008354
-	jal print_sprite_c
+#	la $a0, CLEAN_SPR # L
+#	li $a3, 0x10008354
+#	jal print_sprite_c
 
-	la $a0, CLEAN_SPR # A
-	li $a3, 0x10008360
-	jal print_sprite_c
+#	la $a0, CLEAN_SPR # A
+#	li $a3, 0x10008360
+#	jal print_sprite_c
 
-	la $a0, CLEAN_SPR # Y
-	li $a3, 0x1000836C
-	jal print_sprite_c
+#	la $a0, CLEAN_SPR # Y
+#	li $a3, 0x1000836C
+#	jal print_sprite_c
 
 	j main_init # Re-initialize all values
 # start_game
