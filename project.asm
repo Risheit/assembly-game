@@ -21,7 +21,7 @@
 # 1. Moving Platforms - 2
 # 2. Fail Condition - 1
 # 3. Start Menu - 1
-# 4.  
+# 4. Player Health - 2
 # 
 # Link to video demonstration for final submission: 
 # - (insert YouTube / MyMedia / other URL here). Make sure we can view it! 
@@ -62,7 +62,7 @@
 .eqv HEIGHT_U 32	# Height of the bitmap display in pixels (starts at 0)
 .eqv UNIT 4		# Size of one unit in pixels
 .eqv UNIT_S 2		# The shift equivalent to scaling by a unit (val * UNIT == val << UNIT_S)
-.eqv FRAME_DELAY 80
+.eqv FRAME_DELAY 50
 
 # COLOURS 
 .eqv WHITE 		0x00ffffff
@@ -70,7 +70,7 @@
 .eqv ACCENT		0x004579cc	# Accent colour 
 
 .eqv PLAYER_HEAD 	0x00ffb100
-.eqv PLAYER_BODY 	0x00bA6314
+.eqv PLAYER_BODY 	0x00ba6314
 .eqv PLAYER_LEGS 	0x00146aba
 
 .eqv BLOCKABLE    	0x009fb8cf  	# This colour represents objects that the player 
@@ -79,7 +79,7 @@
 				    	# upon collision.
 .eqv DEADLY		0x00e6330b  	# This colour represents objects that immediately kill the 
 					# player upon collision.
-
+.eqv HEALTH		0x0022b14c
 
 # KEYPRESSES
 .eqv INPUT 0xffff0000
@@ -146,12 +146,15 @@ OBJECT_DETAILS: .half 0:MAX_OBJECTS
 # currently using this memory location, and it can be replaced. If this bit is 1, then there is an
 # object which can't be overwritten until it is marked inactive.
 
+# HEART INFORMATION
+.eqv HEART_WIDTH 2		# Width of a heart in units
+.eqv HEART_HEIGHT 2		# Height of a heart in units
+
 # PLAYER INFORMATION
 
 .eqv PLAYER_WIDTH 3 		# Width of the player in units
 .eqv PLAYER_HEIGHT 4		# Height of the player in units
 
-.eqv INITIAL_HP 3		# The initial health that the player starts with
 .eqv MAX_JUMP_HEIGHT 10		# The maximum height that the player can jump
 
 # PLATFORM INFORMATION
@@ -160,8 +163,9 @@ OBJECT_DETAILS: .half 0:MAX_OBJECTS
 .eqv MIN_PLATFORM_LENGTH 4	# The minimum length each platform can be
 
 # LETTER INFORMATION
-.eqv LETTER_WIDTH 3
-.eqv LETTER_HEIGHT 4
+
+.eqv LETTER_WIDTH 3		# Width of a letter in units
+.eqv LETTER_HEIGHT 4		# Height of a letter in units
 
 # SPRITES
 
@@ -171,6 +175,14 @@ CLEAN_SPR: .word BLACK:WIDTH 	# A large sprite made entirely of black so that th
 BORDER_SPR: .word BLOCKABLE:HEIGHT	# The blocking border wall around the screen to prevent crossing past the sides of the screen
 
 LAVA_SPR: .word DEADLY:WIDTH
+
+HEART_SPR: .word BLACK, HEALTH,
+		 HEALTH, HEALTH
+		 
+#HEART_SPR: .word HEALTH, BLACK, HEALTH,
+#		 HEALTH, HEALTH, HEALTH,
+#		 BLACK, HEALTH, BLACK
+
 
 PLAYER_SPR: .word BLACK, PLAYER_HEAD, BLACK, 
 		  PLAYER_BODY, PLAYER_BODY, PLAYER_BODY,
@@ -309,7 +321,7 @@ main_init_draw:
 	sh $t4, 2($s6) # Store y position * width
 	
 	# Initialize player details
-	li $t4, 0x8100 # Initializes active player with 3 health.
+	li $t4, 0x8180 # Initializes active player with 3 health.
 	sh $t4, 0($s7)
 	
 	# Initialize initial platform location
@@ -352,7 +364,7 @@ main_handle_drawing:
 	move $s4, $s5 # Load initial cleaning address
 	li $s2, 0 
 main_drawing_loop:
-	beq $s2, MAX_OBJECTS, main_handle_drawing_end # loop while s2 < MAX_OBJECTS
+	beq $s2, MAX_OBJECTS, main_draw_health # loop while s2 < MAX_OBJECTS
 	
 	# Check object existance before printing.
 	lh $s3, 0($s1) # Load object details
@@ -394,6 +406,48 @@ main_drawing_loop_end:
 	addi $s2, $s2, 1
 	j main_drawing_loop
 
+main_draw_health: 
+# Registers overwritten:
+# s3 - Player details
+# s4 - Player health
+
+	lh $s3, 0($s7) # Get player details
+	srl $s4, $s3, 7
+	andi $s4, $s4, 0x3 # Get player health
+	
+	# Clean lost hearts
+	la $a0, CLEAN_SPR
+	li $a1, HEART_WIDTH
+	li $a2, HEART_HEIGHT
+	bgtz $s4, main_draw_health_sprites # Don't clean heart if player has enough hp
+	li $a3, 0x10008070 # 1st Heart location hardcoded
+	jal print_sprite_c
+	
+	bgt $s4, 1, main_draw_health_sprites
+	li $a3, 0x10008064 # 2nd Heart location hardcoded
+	jal print_sprite_c
+	
+	bgt $s4, 2, main_draw_health_sprites
+	li $a3, 0x10008058 # 3rd Heart location hardcoded
+	jal print_sprite_c
+
+main_draw_health_sprites:
+	la $a0, HEART_SPR
+	li $a1, HEART_WIDTH
+	li $a2, HEART_HEIGHT
+	blt $s4, 1, main_handle_drawing_end # Don't draw heart if player doesn't have enough hp	
+	li $a3, 0x10008070 # 1st Heart location hardcoded
+	jal print_sprite_c
+
+		
+	blt $s4, 2, main_handle_drawing_end
+	li $a3, 0x10008064 # 2nd Heart location hardcoded
+	jal print_sprite_c
+	
+	blt $s4, 3, main_handle_drawing_end
+	li $a3, 0x10008058 # 3rd Heart location hardcoded
+	jal print_sprite_c
+
 main_handle_drawing_end:
 
 
@@ -419,7 +473,7 @@ main_input_w:
 	
 	srl $t5, $t4, 9 
 	andi $t5, $t5, 0xF # Consider bits 9-12
-	bnez $t5, main_input_a 	# Only jump if currently on in the air (bits 9-12 are 0)
+	bnez $t5, main_input_a 	# Only jump if currently not in the air (bits 9-12 are 0)
 	
 	ori $t4, $t4, 0x200 # Set 9b = 1 => 12b|11b|10b|9b| = 0001 as others are already 0.
 
@@ -485,11 +539,20 @@ main_physics_loop:
 	srl $t4, $s3, 4 
 	andi $t4, $t4, 0x7 # Consider only bits 4-6
 	
-	beq $t4, 0, main_player_jump_physics
+	beq $t4, 0, main_player_physics
 	beq $t4, 1, main_platform_physics
 #	beq $t4, 2, gobs_firewall_spr
 #	beq $t4, 3, gobs_fish_spr
 #	beq $t4, 4, gobs_pigeon_spr
+
+main_player_physics:
+	
+main_player_check_death:
+	# End the game if the player has 0 hp left
+	srl $t4, $s3, 7
+	andi $t4, $t4, 0x3 # Get player health
+	bnez $t4, main_player_jump_physics # Skip if player has more than 0 hp
+	jal end_game
 
 main_player_jump_physics:
 	# Set up and down movement based on what state of jump the player is on
@@ -640,8 +703,10 @@ main_player_moving_down:
 	j main_player_at_right_wall
 
 main_player_on_lava:
-	jal end_game
-
+	# Kill player by setting their hp to 0
+	andi $s3, $s3, 0xFE7F # Set hp to 0
+	j main_player_at_right_wall
+	
 main_player_at_right_wall:
 	# Check for wall on right of player
 	# Do this by moving down 1 unit and right 3 units from the player's screen address
