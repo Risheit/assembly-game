@@ -62,7 +62,7 @@
 .eqv HEIGHT_U 32	# Height of the bitmap display in pixels (starts at 0)
 .eqv UNIT 4		# Size of one unit in pixels
 .eqv UNIT_S 2		# The shift equivalent to scaling by a unit (val * UNIT == val << UNIT_S)
-.eqv FRAME_DELAY 50
+.eqv FRAME_DELAY 10
 
 # COLOURS 
 .eqv WHITE 		0x00ffffff
@@ -73,6 +73,7 @@
 .eqv PLAYER_BODY 	0x00ba6314
 .eqv PLAYER_LEGS 	0x00146aba
 
+.eqv BORDER		0x00fffffe	# The colour represents the screen borders
 .eqv BLOCKABLE    	0x009fb8cf  	# This colour represents objects that the player 
 					# can collide with safely, and blocks the player's path.
 .eqv DAMAGING		0x00a60828	# This colour represents objects that damage the player
@@ -92,7 +93,7 @@
 ############################ GAME DATA ###############################
 
 # OBJECT INFORMATION
-.eqv MAX_OBJECTS 10		# The maximum number of objects (platforms/entities) allowed on 
+.eqv MAX_OBJECTS 8		# The maximum number of objects (platforms/entities) allowed on 
 				# the screen at once. (Array size of OBJECT_X arrays)
 
 OBJECT_LOCATIONS: .word 0:MAX_OBJECTS
@@ -136,6 +137,8 @@ OBJECT_DETAILS: .half 0:MAX_OBJECTS
 # 	  NOTE: Rightwards movement is unimplemented for platforms.
 #	FIRE WALL:
 #	 bits 7-8 act as a regular 2-bit value representing the height of the wall.
+#    bits 9-10 act as a regular 2-bit value representing the number of frames that will pass before this wall moves.
+#    bits 12-13 act as a regular 2-bit counter representing the number of frames that have passed since this wall has moved.
 #	LAVA FISH:
 #	 bits 7-12 act as the maximum unit height that the fish will leap to. This value is shifted to the left
 #	 by 2 to get the y-value in units that the fish will jump.
@@ -162,6 +165,9 @@ OBJECT_DETAILS: .half 0:MAX_OBJECTS
 .eqv MAX_PLATFORM_LENGTH 6	# The maximum length each platform can be
 .eqv MIN_PLATFORM_LENGTH 4	# The minimum length each platform can be
 
+# FIREWALL INFORMATION
+.eqv MAX_FIREWALL_HEIGHT 3	# The maximum height each fire wall can be
+
 # LETTER INFORMATION
 
 .eqv LETTER_WIDTH 3		# Width of a letter in units
@@ -172,24 +178,21 @@ OBJECT_DETAILS: .half 0:MAX_OBJECTS
 CLEAN_SPR: .word BLACK:WIDTH 	# A large sprite made entirely of black so that the print sprite function can be used 
 				# with it and varying widths/heights to clean other sprites as they move
 				
-BORDER_SPR: .word BLOCKABLE:HEIGHT	# The blocking border wall around the screen to prevent crossing past the sides of the screen
+BORDER_SPR: .word BORDER:HEIGHT	# The blocking border wall around the screen to prevent crossing past the sides of the screen
 
 LAVA_SPR: .word DEADLY:WIDTH
 
 HEART_SPR: .word BLACK, HEALTH,
 		 HEALTH, HEALTH
 		 
-#HEART_SPR: .word HEALTH, BLACK, HEALTH,
-#		 HEALTH, HEALTH, HEALTH,
-#		 BLACK, HEALTH, BLACK
-
-
 PLAYER_SPR: .word BLACK, PLAYER_HEAD, BLACK, 
 		  PLAYER_BODY, PLAYER_BODY, PLAYER_BODY,
 		  BLACK, PLAYER_BODY, BLACK, 
 		  BLACK, PLAYER_LEGS, BLACK
 
 PLATFORM_SPR: .word BLOCKABLE:8		
+
+FIREWALL_SPR: .word DAMAGING:8
 
 LETT_F_SPR: .word WHITE, WHITE, WHITE,
 		  WHITE, BLACK, BLACK,
@@ -244,6 +247,8 @@ main:
 # REGISTER CONTRACT:
 # a0, a1, a2, a3  - arguments to be given to functions
 # t4, t5, t6 - intermediate storage for values to be used and discarded
+# t8 - Secondary loop counter if needed
+# t9 - Limit value for secondary loop counter
 # s0, s1, s2, s3, s4 - variables not preserved across sections
 # s5 - CLEAN_LOCATIONS Array
 # s6 - OBJECT_LOCATIONS Array
@@ -302,6 +307,9 @@ main_init_draw:
 	subi $a3, $a3, WIDTH # 3rd last row
 	jal print_sprite_c
 
+	# Sometimes border units will just be deleted. Not sure why.
+	# We could replace them every frame, but it slows down the game tremendously, so it's just
+	# a bug that'll have to exist.
 	la $a0, BORDER_SPR
 	li $a1, 1
 	li $a2, HEIGHT
@@ -311,6 +319,7 @@ main_init_draw:
 	addi $a3, $gp, WIDTH
 	subi $a3, $a3, 4 # Right side
 	jal print_sprite_c
+
 
 	# Initialize player location	
 	li $t4, 6 # Player's x-position accounting for sprite size (in units, screen goes from 0 - WIDTH_U)
@@ -419,16 +428,16 @@ main_draw_health:
 	la $a0, CLEAN_SPR
 	li $a1, HEART_WIDTH
 	li $a2, HEART_HEIGHT
-	bgtz $s4, main_draw_health_sprites # Don't clean heart if player has enough hp
-	li $a3, 0x10008070 # 1st Heart location hardcoded
+	bgt $s4, 2, main_draw_health_sprites
+	li $a3, 0x10008058 # 3rd Heart location hardcoded
 	jal print_sprite_c
 	
 	bgt $s4, 1, main_draw_health_sprites
 	li $a3, 0x10008064 # 2nd Heart location hardcoded
 	jal print_sprite_c
 	
-	bgt $s4, 2, main_draw_health_sprites
-	li $a3, 0x10008058 # 3rd Heart location hardcoded
+	bgtz $s4, main_draw_health_sprites # Don't clean heart if player has enough hp
+	li $a3, 0x10008070 # 1st Heart location hardcoded
 	jal print_sprite_c
 
 main_draw_health_sprites:
@@ -541,9 +550,10 @@ main_physics_loop:
 	
 	beq $t4, 0, main_player_physics
 	beq $t4, 1, main_platform_physics
-#	beq $t4, 2, gobs_firewall_spr
+	beq $t4, 2, main_platform_physics # Firewall and platform physics are identical
 #	beq $t4, 3, gobs_fish_spr
 #	beq $t4, 4, gobs_pigeon_spr
+	j main_handle_physics_end # Skip if nothing
 
 main_player_physics:
 	
@@ -577,6 +587,7 @@ main_player_descending:
 	j main_update_object
 
 main_platform_physics:
+
 	# Set platform movement according bits 10-13.
 	srl $t4, $s3, 10
 	andi $t4, $t4, 0x3 # Get time until movement
@@ -706,8 +717,8 @@ main_player_on_lava:
 	# Kill player by setting their hp to 0
 	andi $s3, $s3, 0xFE7F # Set hp to 0
 	j main_player_at_right_wall
-	
-main_player_at_right_wall:
+
+main_player_at_right_wall:	
 	# Check for wall on right of player
 	# Do this by moving down 1 unit and right 3 units from the player's screen address
 	li $t4, 3
@@ -718,14 +729,17 @@ main_player_at_right_wall:
 	add $t5, $t5, $t4 # Current object location + 1 down
 
 	lw $t5, 0($t5) # Get colour at unit at right of player
-	bne $t5, BLOCKABLE, main_player_at_left_wall # Skip if object isn't at a wall
+	beq $t5, BLOCKABLE, main_player_moving_right # Go if object is a blocking colour
+	beq $t5, BORDER, main_player_moving_right # Go if object is a border
+	j main_player_at_left_wall # Skip if no collision with wall
 	
+main_player_moving_right:
 	srl $t4, $s3, 1
 	andi $t4, $t4, 0x1 # Consider only left/right bit
 	beqz $t4, main_player_at_left_wall # Player not moving right
-	
-main_player_moving_right:
+
 	andi $s3, $s3, 0xFFFC # Prevent player from moving right
+	j main_player_at_left_wall
 
 main_player_at_left_wall:
 	# Check for wall on left of player
@@ -738,13 +752,15 @@ main_player_at_left_wall:
 	add $t5, $t5, $t4 # Current object location + 4 down
 
 	lw $t5, 0($t5) # Get colour at unit left of player
-	bne $t5, BLOCKABLE, main_update_collision # Skip if object isn't at a wall
+	beq $t5, BLOCKABLE, main_player_moving_left # Go if object is at a blocking colour
+	beq $t5, BORDER, main_player_moving_left # Go if object is a border
+	j main_update_collision # Skip if no collision with wall
 	
+main_player_moving_left:
 	srl $t4, $s3, 1
 	andi $t4, $t4, 0x1 # Consider only left/right bit
 	beq $t4, 0x1, main_update_collision # Player not moving left
 
-main_player_moving_left:
 	andi $s3, $s3, 0xFFFC # Prevent player from moving left
 	j main_update_collision
 	
@@ -760,7 +776,7 @@ main_platform_at_right_wall:
 	sll $t6, $t4, UNIT_S # width * units
 	add $t6, $s4, $t6
 	lw $t5, 0($t6) # Get colour at right of platform
-	bne $t5, BLOCKABLE, main_platform_at_left_wall # Skip if no wall 
+	bne $t5, BORDER, main_platform_at_left_wall # Skip if no wall 
 	
 	subi $t4, $t4, 1 # Decrease length by 1
 	sll $t4, $t4, 7
@@ -787,7 +803,7 @@ main_platform_at_left_wall:
 	# Check for wall at left of platform (1 unit to the left)
 	subi $t5, $s4, UNIT # One unit to the left
 	lw $t5, 0($t5) # Colour left of platform
-	bne $t5, BLOCKABLE, main_collisions_loop_end
+	bne $t5, BORDER, main_collisions_loop_end
 
 	andi $s3, $s3, 0xFFFE # Set no x-movement this frame (we simulate it by decreasing the platform width from the left)
 
@@ -813,6 +829,113 @@ main_platform_at_left_wall:
 	j main_update_collision
 
 main_collision_firewall:
+main_firewall_on_right:
+	srl $t4, $s3, 1
+	andi $t4, $t4, 0x1 # Consider only left/right bit
+	beqz $t4, main_firewall_on_left # Skip if fire wall not moving right, since it can't collide.
+
+
+	# Check for object on right of fire wall
+	# Do this by moving right 1 unit from every unit of the fire wall 
+	li $t4, 1
+	sll $t4, $t4, UNIT_S
+	add $t5, $s4, $t4 # Current object location + 1 right
+	
+	srl $t9, $s3, 7
+	andi $t9, $t9, 0x3 # Loop through whole height of fire wall
+	li $t8, 0
+	li $t6, 0 # How much health to subtract. Set only when player gets hit.
+main_firewall_right_loop:	
+	beq $t8, $t9, main_firewall_right_loop_end # No collision on right of wall
+	
+	lw $t4, 0($t5) # Get colour at unit at right of fire wall
+	beq $t4, BORDER, main_firewall_at_right_wall # Go if object is a blocking colour
+	beq $t4, PLAYER_BODY, main_firewall_contact_player_right # Go if hits player
+	
+	addi $t5, $t5, WIDTH # Go down a row to right of lower firewall unit
+	addi $t8, $t8, 1
+	j main_firewall_right_loop
+	
+main_firewall_right_loop_end:
+	j main_firewall_on_left # No collision
+
+main_firewall_contact_player_right:
+	li $t6, 1
+main_firewall_at_right_wall:		
+	lh $t4, 0($s7) 
+	srl $t5, $t4, 7
+	andi $t5, $t5, 0x3 # Get player health
+	
+	sub $t5, $t5, $t6 # Remove health if player was hit
+	sll $t5, $t5, 7
+	andi $t4, $t4, 0xFE7F
+	or $t4, $t4, $t5 # Update player health
+	sh $t4, 0($s7)
+	
+	# Clean sprite because the drawing section won't clean deleted sprites
+	move $a3, $s3 
+	jal get_object_spr
+	la $a0, CLEAN_SPR
+	move $a3, $s4
+	jal print_sprite_c
+	
+	andi $s3, $s3, 0xFFFC # Prevent wall from moving right
+	andi $s3, $s3, 0x7FFF # Delete fire wall
+	j main_update_collision
+
+main_firewall_on_left:
+	srl $t4, $s3, 1
+	andi $t4, $t4, 0x1 # Consider only left/right bit
+	beq $t4, 0x1, main_update_collision # Fire wall not moving left, so it can't collide
+
+	# Check for wall on left of player
+	# Do this by moving left 1 unit from the player's screen address
+	li $t4, 1
+	sll $t4, $t4, UNIT_S # 1 unit left
+	sub $t5, $s4, $t4 # Current object location + 1 left
+
+	srl $t9, $s3, 7
+	andi $t9, $t9, 0x3 # Loop through whole height of fire wall
+	li $t8, 0
+	li $t6, 0 # How much health to subtract. Set only when player gets hit.
+main_firewall_left_loop:	
+	beq $t8, $t9, main_firewall_left_loop_end # No collision on right of wall
+	
+	lw $t4, 0($t5) # Get colour at unit at right of fire wall
+	beq $t4, BORDER, main_firewall_at_left_wall # Go if object is the border
+	beq $t4, PLAYER_BODY, main_firewall_contact_player_left # Go if hits player
+	
+	addi $t5, $t5, WIDTH # Go down a row to right of lower firewall unit
+	addi $t8, $t8, 1
+	j main_firewall_left_loop
+	
+main_firewall_left_loop_end:
+	j main_update_collision # No collision
+
+main_firewall_contact_player_left:
+	li $t6, 1
+main_firewall_at_left_wall:	
+	lh $t4, 0($s7) 
+	srl $t5, $t4, 7
+	andi $t5, $t5, 0x3 # Get player health
+	
+	sub $t5, $t5, $t6 # Remove health if player was hit
+	sll $t5, $t5, 7
+	andi $t4, $t4, 0xFE7F
+	or $t4, $t4, $t5 # Update player health
+	sh $t4, 0($s7)
+	
+	# Clean sprite because the drawing section won't clean deleted sprites
+	move $a3, $s3 
+	jal get_object_spr
+	la $a0, CLEAN_SPR
+	move $a3, $s4
+	jal print_sprite_c
+	
+	andi $s3, $s3, 0xFFFC # Prevent fire wall from moving left
+	andi $s3, $s3, 0x7FFF # Delete fire wall
+	j main_update_collision
+	
 main_collision_fish:
 main_collision_pigeon:
 
@@ -890,7 +1013,7 @@ main_add_platform_right:
 	sll $t6, $t4, UNIT_S # width * units
 	add $t6, $s4, $t6
 	lw $t5, 0($t6) # Get colour at right of platform
-	bne $t5, BLOCKABLE, main_add_platform_left # Skip if no wall 
+	bne $t5, BORDER, main_add_platform_left # Skip if no wall 
 
 	li $t5, MIN_PLATFORM_LENGTH
 	blt $t4, $t5, main_incr_length_on_left # Always increase length before min length reached
@@ -930,7 +1053,7 @@ main_add_platform_left:
 	# Check for wall at left of platform (1 unit to the left)
 	subi $t5, $s4, UNIT # One unit to the left
 	lw $t5, 0($t5) # Colour left of platform
-	bne $t5, BLOCKABLE, main_objects_loop_end
+	bne $t5, BORDER, main_objects_loop_end
 
 	srl $t4, $s3, 7
 	andi $t4, $t4, 0x7 # Get length of platform
@@ -984,13 +1107,13 @@ main_init_object:
 	addi $a1, $a1, 1 # range 1 - 4
 	
 	beq $a0, 1, main_init_platform
-#	beq $a0, 2, main_init_firewall
+	beq $a0, 2, main_init_firewall
 #	beq $a0, 3, main_init_lavafish
 #	beq $a0, 4, main_init_pigeon
 	j main_objects_loop_end # Default do nothing
 
 main_init_platform:
-	bgt $s2, 4, main_objects_loop_end # No more than 4 possible platforms at a time
+	bgt $s2, 5, main_objects_loop_end # No more than 5 possible platforms at a time
 
 	# Randomly pick a row. If it is within 3 rows of another row holding a platform,
 	# pick again
@@ -1011,7 +1134,7 @@ main_init_platform:
 	
 	# Store object details
 	li $s3, 0x8090 # Base platform
-	
+		
 	li $v0, 42
 	li $a0, 0
 	li $a1, 3
@@ -1043,6 +1166,64 @@ main_platform_starts_right:
 	
 
 main_init_firewall:
+	bgt $s2, 7, main_objects_loop_end # Limit number of firewalls at a time
+
+	# Randomly pick a row. If it is within 3 rows of another row holding a platform,
+	# pick again
+	li $v0, 42
+	li $a0, 0
+	li $a1, 18 # Leave buffer on bottom
+	syscall
+	addi $a0, $a0, 6 # Leave buffer on top (range 6 - 24)
+	
+	sll $a0, $a0, WIDTH_S # Get row to look at
+	li $a1, 4 # 4 rows between them minimum
+	li $a2, 0x2 # Fire wall
+	jal check_row_conflicts_c
+	
+	beq $v0, 1, main_init_firewall # Loop if conflict exists
+	
+	sh $a0, 2($s0) # Store y
+	# Store object details
+	li $s3, 0x8020 # Base fire wall
+	
+	li $v0, 42
+	li $a0, 0
+	li $a1, MAX_FIREWALL_HEIGHT
+	syscall
+	addi $a0, $a0, 1 # Get fire wall height (range 2 - 3)
+	sll $t4, $a0, 7
+	or $s3, $s3, $t4 # Update fire wall height
+	
+	li $v0, 42
+	li $a0, 0
+	li $a1, 1
+	syscall 
+	addi $a0, $a0, 2 # Get fire wall speed (range 2 - 3) 
+	sll $t4, $a0, 9
+	or $s3, $s3, $t4 # Update speed
+	
+	li $v0, 42
+	li $a0, 0
+	li $a1, 2
+	syscall # Get right (0) or left (1) starting location
+	# Set movement based on starting location (0/1 = left/right)
+	sll $t4, $a0, 1
+	or $s3, $s3, $t4 # Update fire wall movement direction
+			
+	beqz $a0, main_firewall_starts_right # Set left/right starting location
+main_firewall_starts_left:
+	li $t4, UNIT # Start left wall
+	sh $t4, 0($s0) # Store x
+	j main_store_object
+
+main_firewall_starts_right:
+	li $t4, WIDTH
+	subi $t4, $t4, UNIT # UNIT - WIDTH => 0 - (WIDTH - UNIT)
+	subi $t4, $t4, UNIT # Start right wall
+	sh $t4, 0($s0) # Store x
+	j main_store_object
+
 main_init_lavafish:
 main_init_pigeon:
 
@@ -1291,10 +1472,11 @@ gobs_platform_spr:
 	jr $ra
 
 gobs_firewall_spr:
-	la $a0, TEST_SPR
-	li $a1, PLAYER_WIDTH
-	li $a2, PLAYER_HEIGHT
-	jr $ra	# Unimplemented
+	la $a0, FIREWALL_SPR
+	li $a1, 1
+	srl $a2, $a3, 7
+	andi $a2, $a2, 0x7 # Consider only bits 7-9 as fire wall height
+	jr $ra
 
 gobs_fish_spr:
 	la $a0, TEST_SPR
